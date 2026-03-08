@@ -1,0 +1,34 @@
+# CMake
+build/
+cmake-build-*/
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+*.cmake
+!CMakeLists.txt
+
+# Visual Studio / VS Code
+.vscode/
+*.sln
+*.vcxproj
+*.vcxproj.user
+*.suo
+*.pdb
+*.ilk
+*.exp
+
+# Executables
+*.exe
+*.dll
+*.lib
+
+# Qt
+*.pro.user
+moc_*
+ui_*
+qrc_*
+*_autogen/
+
+# OS generated
+.DS_Store
+Thumbs.db
