@@ -10,7 +10,7 @@
 #include <QComboBox>
 
 MainWindow::MainWindow(QWidget *parent)
-    : QMainWindow(parent), m_yuvReader(nullptr), m_rgbBuffer(nullptr), m_isPlaying(false), m_frameCount(0)
+    : QMainWindow(parent), m_yuvReader(nullptr), m_rgbBuffer(nullptr), m_isPlaying(false), m_frameCount(0), m_totalTime(0), m_processedFrames(0)
 {
     setupUi();
 
@@ -18,7 +18,7 @@ MainWindow::MainWindow(QWidget *parent)
     connect(m_playTimer, &QTimer::timeout, this, &MainWindow::processNextFrame);
 
     m_perfTimer = new QElapsedTimer();
-    
+
     // FPS Timer: updates every 1 second
     m_fpsTimer = new QTimer(this);
     connect(m_fpsTimer, &QTimer::timeout, this, &MainWindow::updateFPS);
@@ -61,8 +61,8 @@ void MainWindow::setupUi()
     m_spinFPS->setPrefix("基准帧率: ");
     connect(m_spinFPS, QOverload<int>::of(&QSpinBox::valueChanged), [this](int fps)
             {
-        changePlaybackRate(); // 更新定时器间隔
-    });
+                changePlaybackRate(); // 更新定时器间隔
+            });
 
     // 倍速选择
     m_comboRate = new QComboBox(this);
@@ -89,7 +89,7 @@ void MainWindow::setupUi()
 
     // 控制区域：快退 - 帧数信息 - 快进
     QHBoxLayout *controlLayout = new QHBoxLayout();
-    
+
     m_btnBackward = new QPushButton("<< 后退15帧", this);
     m_btnBackward->setEnabled(false);
     connect(m_btnBackward, &QPushButton::clicked, this, &MainWindow::seekBackward);
@@ -110,6 +110,11 @@ void MainWindow::setupUi()
 
     // 模式选择
     QHBoxLayout *modeLayout = new QHBoxLayout();
+
+    // 自动模式 CheckBox
+    m_checkAuto = new QCheckBox("自动选择最优 (Auto)", this);
+    connect(m_checkAuto, &QCheckBox::toggled, this, &MainWindow::toggleAutoMode);
+
     m_radScalar = new QRadioButton("标量 (C)", this);
     m_radSSE = new QRadioButton("SSE (SIMD)", this);
     m_radMT = new QRadioButton("多线程", this);
@@ -126,6 +131,7 @@ void MainWindow::setupUi()
     connect(m_radMT, &QRadioButton::toggled, this, &MainWindow::updateMode);
 
     modeLayout->addWidget(new QLabel("模式:"));
+    modeLayout->addWidget(m_checkAuto); // 添加 Auto 选项
     modeLayout->addWidget(m_radScalar);
     modeLayout->addWidget(m_radSSE);
     modeLayout->addWidget(m_radMT);
@@ -141,10 +147,14 @@ void MainWindow::setupUi()
     m_lblStatus = new QLabel("就绪", this);
     m_lblFPS = new QLabel("FPS: 0", this);
     m_lblTime = new QLabel("耗时: 0 ms", this);
+    m_lblAvgTime = new QLabel("平均: 0 ms", this); // 新增平均耗时显示
 
     statusLayout->addWidget(m_lblStatus);
     statusLayout->addStretch();
     statusLayout->addWidget(m_lblTime);
+    statusLayout->addWidget(new QLabel(" | ", this));
+    statusLayout->addWidget(m_lblAvgTime);
+    statusLayout->addWidget(new QLabel(" | ", this));
     statusLayout->addWidget(m_lblFPS);
 
     mainLayout->addLayout(topLayout);
@@ -156,12 +166,78 @@ void MainWindow::setupUi()
 
 void MainWindow::updateMode()
 {
+    // 如果是自动模式，不允许手动切换（或者手动切换会关闭自动模式）
+    // 这里简单处理：如果用户点击了单选框，就认为退出了自动模式
+    // 但因为 RadioButton 是互斥的，我们主要看 CheckBox 的状态
+
+    if (m_checkAuto->isChecked())
+    {
+        // 如果在自动模式下，Radio Button 只是显示当前实际使用的模式，不触发逻辑变更
+        return;
+    }
+
     if (m_radScalar->isChecked())
         m_currentMode = MODE_SCALAR;
     else if (m_radSSE->isChecked())
         m_currentMode = MODE_SSE;
     else if (m_radMT->isChecked())
         m_currentMode = MODE_MT;
+
+    // 重置平均统计
+    m_totalTime = 0;
+    m_processedFrames = 0;
+}
+
+void MainWindow::toggleAutoMode(bool checked)
+{
+    if (checked)
+    {
+        m_radScalar->setEnabled(false);
+        m_radSSE->setEnabled(false);
+        m_radMT->setEnabled(false);
+        selectBestMode();
+    }
+    else
+    {
+        m_radScalar->setEnabled(true);
+        m_radSSE->setEnabled(true);
+        m_radMT->setEnabled(true);
+        // 恢复到当前选中的模式
+        updateMode();
+    }
+}
+
+void MainWindow::selectBestMode()
+{
+    // 简单的启发式策略：根据分辨率选择
+    // 小分辨率 (CIF等) -> SSE (避免线程开销)
+    // 大分辨率 (720p+) -> 多线程
+
+    if (!m_yuvReader)
+        return;
+
+    int width = m_yuvReader->width;
+    int height = m_yuvReader->height;
+    long totalPixels = width * height;
+
+    // 阈值设定：大约 40万像素 (800x600) 以下用 SSE，以上用多线程
+    // CIF 是 352*288 = 101376
+    // 720p 是 1280*720 = 921600
+
+    if (totalPixels < 400000)
+    {
+        m_currentMode = MODE_SSE;
+        m_radSSE->setChecked(true);
+    }
+    else
+    {
+        m_currentMode = MODE_MT;
+        m_radMT->setChecked(true);
+    }
+
+    // 重置统计
+    m_totalTime = 0;
+    m_processedFrames = 0;
 }
 
 void MainWindow::openFile()
@@ -187,14 +263,15 @@ void MainWindow::openFile()
     }
 
     // 如果是 Y4M，更新界面上的宽/高显示
-    if (m_yuvReader->is_y4m) {
+    if (m_yuvReader->is_y4m)
+    {
         m_spinWidth->blockSignals(true);
         m_spinHeight->blockSignals(true);
         m_spinWidth->setValue(m_yuvReader->width);
         m_spinHeight->setValue(m_yuvReader->height);
         m_spinWidth->blockSignals(false);
         m_spinHeight->blockSignals(false);
-        
+
         // 更新本地变量以正确分配 RGB buffer
         width = m_yuvReader->width;
         height = m_yuvReader->height;
@@ -220,6 +297,12 @@ void MainWindow::openFile()
     m_btnPlay->setEnabled(true);
     m_lblStatus->setText(QString("已加载: %1 (%2x%3)").arg(fileName).arg(width).arg(height));
 
+    // 如果开启了自动模式，重新评估最佳策略
+    if (m_checkAuto->isChecked())
+    {
+        selectBestMode();
+    }
+
     // 显示第一帧
     processNextFrame();
 }
@@ -242,7 +325,9 @@ void MainWindow::cleanupYuv()
     m_btnPlay->setText("播放");
     m_btnPlay->setChecked(false);
     m_frameCount = 0;
-    
+    m_totalTime = 0;
+    m_processedFrames = 0;
+
     m_lblFrameInfo->setText("0/0");
     m_btnForward->setEnabled(false);
     m_btnBackward->setEnabled(false);
@@ -263,76 +348,85 @@ void MainWindow::playPause()
     {
         m_isPlaying = true; // 先设置状态
         m_btnPlay->setText("暂停");
-        
+
         // 确保使用当前设置的 FPS 和倍速启动定时器
-        changePlaybackRate(); 
-        
+        changePlaybackRate();
+
         // 强制启动（双重保险，因为 changePlaybackRate 现在会检查 m_isPlaying）
-        if (!m_playTimer->isActive()) {
-             m_playTimer->start();
+        if (!m_playTimer->isActive())
+        {
+            m_playTimer->start();
         }
     }
 }
 
 void MainWindow::changePlaybackRate()
 {
-    if (!m_yuvReader) return;
-    
+    if (!m_yuvReader)
+        return;
+
     double rate = m_comboRate->currentData().toDouble();
     int baseFPS = m_spinFPS->value();
     // 保护：如果 baseFPS 为 0，设为 1
-    if (baseFPS <= 0) baseFPS = 1;
+    if (baseFPS <= 0)
+        baseFPS = 1;
 
     int interval = 1000 / (baseFPS * rate);
-    if (interval < 1) interval = 1;
+    if (interval < 1)
+        interval = 1;
 
     // 不论当前是否在播放，都更新定时器间隔，但只在播放时启动
-    m_playTimer->setInterval(interval); 
-    
-    if (m_isPlaying) {
+    m_playTimer->setInterval(interval);
+
+    if (m_isPlaying)
+    {
         m_playTimer->start();
     }
 }
 
 void MainWindow::seekForward()
 {
-    if (!m_yuvReader) return;
+    if (!m_yuvReader)
+        return;
 
     int current = m_yuvReader->frame_index;
     int target = current + 15;
-    if (target >= m_yuvReader->total_frames) target = m_yuvReader->total_frames - 1;
-    if (target < 0) target = 0; 
+    if (target >= m_yuvReader->total_frames)
+        target = m_yuvReader->total_frames - 1;
+    if (target < 0)
+        target = 0;
 
     yuv_reader_seek(m_yuvReader, target);
-    
+
     // 立即刷新画面（即使在暂停时）
-    if (!m_isPlaying) {
-        // 为了显示 seek 后的那一帧，我们需要再调一次 next_frame 或者 seek 后读
-        // yuv_reader_seek 只是定位了文件指针
-        // processNextFrame 会读取并显示，且会 frame_index++
-        // 如果我们想停在 target 帧，processNextFrame 会显示 target 并停在 target+1
-        // 这符合逻辑
+    if (!m_isPlaying)
+    {
         processNextFrame();
-    } else {
-        // 播放中，不需要额外操作，下一帧定时器触发时自然会读到
-        // 只是更新一下 Label
+    }
+    else
+    {
         m_lblFrameInfo->setText(QString("%1/%2").arg(m_yuvReader->frame_index).arg(m_yuvReader->total_frames));
     }
 }
 
 void MainWindow::seekBackward()
 {
-    if (!m_yuvReader) return;
+    if (!m_yuvReader)
+        return;
 
     int current = m_yuvReader->frame_index;
     int target = current - 15;
-    if (target < 0) target = 0;
+    if (target < 0)
+        target = 0;
 
     yuv_reader_seek(m_yuvReader, target);
-    
-    if (!m_isPlaying) {
+
+    if (!m_isPlaying)
+    {
         processNextFrame();
-    } else {
+    }
+    else
+    {
         m_lblFrameInfo->setText(QString("%1/%2").arg(m_yuvReader->frame_index).arg(m_yuvReader->total_frames));
     }
 }
@@ -385,13 +479,19 @@ void MainWindow::processNextFrame()
     qint64 elapsed = m_perfTimer->nsecsElapsed();
     double ms = elapsed / 1000000.0;
 
-    m_lblTime->setText(QString("处理耗时: %1 ms").arg(ms, 0, 'f', 2));
+    // 更新统计数据
+    m_totalTime += ms;
+    m_processedFrames++;
+    double avgTime = (m_processedFrames > 0) ? (m_totalTime / m_processedFrames) : 0.0;
+
+    m_lblTime->setText(QString("实时: %1 ms").arg(ms, 0, 'f', 2));
+    m_lblAvgTime->setText(QString("平均: %1 ms").arg(avgTime, 0, 'f', 2));
 
     // 显示
     // QImage::Format_RGB888 期望数据是打包的 RGB
     QImage img(m_rgbBuffer, width, height, width * 3, QImage::Format_RGB888);
     m_videoWidget->updateFrame(img);
-    
+
     // FPS counting
     m_frameCount++;
 }

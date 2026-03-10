@@ -10,6 +10,7 @@
 #include <QPushButton>
 #include <QSpinBox>
 #include <QComboBox>
+#include <QCheckBox>
 #include "videowidget.h"
 #include "yuv_common.h"
 #include "yuv_converter.h"
@@ -31,10 +32,12 @@ private slots:
     void changePlaybackRate(); // 更改倍速
     void seekForward();        // 快进
     void seekBackward();       // 快退
+    void toggleAutoMode(bool checked); // 切换自动模式
 
 private:
     void setupUi();
     void cleanupYuv();
+    void selectBestMode(); // 选择最佳模式
 
     VideoWidget *m_videoWidget;
     QPushButton *m_btnOpen;
@@ -50,6 +53,9 @@ private:
     QPushButton *m_btnForward;
     QPushButton *m_btnBackward;
 
+    // 自动选择模式
+    QCheckBox *m_checkAuto;
+
     QRadioButton *m_radScalar;
     QRadioButton *m_radSSE;
     QRadioButton *m_radMT;
@@ -57,6 +63,7 @@ private:
     QLabel *m_lblStatus;
     QLabel *m_lblFPS;
     QLabel *m_lblTime;
+    QLabel *m_lblAvgTime; // 平均耗时
     QLabel *m_lblFrameInfo; // 显示当前帧/总帧数
 
     QTimer *m_playTimer;
@@ -65,6 +72,10 @@ private:
     // FPS counting
     QTimer *m_fpsTimer;
     int m_frameCount;
+
+    // 平均耗时计算
+    double m_totalTime;
+    int m_processedFrames;
 
     YUVReader *m_yuvReader;
     uint8_t *m_rgbBuffer;

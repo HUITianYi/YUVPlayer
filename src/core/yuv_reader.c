@@ -170,23 +170,17 @@ int yuv_reader_seek(YUVReader *reader, size_t frame_idx)
         return -1;
 
     // 对于 Y4M，由于变长头，跳转比较复杂。
-    // 我们只简单支持跳转到 0（重置）。
+    // 我们假定每帧头都是固定长度的 "FRAME\n" (6字节)
     if (reader->is_y4m)
     {
-        if (frame_idx == 0)
+        size_t y4m_frame_size = 6 + reader->current_frame.frame_size;
+        size_t offset = reader->data_start_offset + frame_idx * y4m_frame_size;
+        if (fseek(reader->file, (long)offset, SEEK_SET) == 0)
         {
-            fseek(reader->file, reader->data_start_offset, SEEK_SET);
-            reader->frame_index = 0;
+            reader->frame_index = frame_idx;
             return 1;
         }
-        else
-        {
-            // 警告或实现线性扫描？
-            // 目前先返回失败或尝试近似。
-            // 如果假设头长度很小（6字节 "FRAME\n"），我们可以尝试。
-            // 但最好只支持 0。
-            return 0;
-        }
+        return 0;
     }
 
     size_t offset = frame_idx * reader->current_frame.frame_size;
