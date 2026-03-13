@@ -12,7 +12,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # Configure Qt
 set(CMAKE_PREFIX_PATH "e:/Qt/6.10.2/mingw_64")
 set(QT_FORCE_MIN_CMAKE_VERSION_FOR_USING_QT 3.20)
-find_package(Qt6 COMPONENTS Widgets REQUIRED)
+find_package(Qt6 COMPONENTS Widgets Multimedia REQUIRED)
 
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
@@ -24,11 +24,14 @@ set(CORE_SOURCES
     src/core/yuv_converter.c
     src/core/yuv_converter_sse.c
     src/core/thread_pool.c
+    src/core/srt_parser.cpp
 )
 
 set(GUI_SOURCES
     src/gui/mainwindow.cpp
     src/gui/videowidget.cpp
+    src/gui/mobile_player.h
+    src/gui/mobile_player.cpp
     src/main.cpp
     src/resources/app.qrc
     src/resources/app.rc
@@ -45,7 +48,15 @@ add_executable(YUVPlayer
     ${GUI_SOURCES}
 )
 
-target_link_libraries(YUVPlayer PRIVATE Qt6::Widgets)
+target_link_libraries(YUVPlayer PRIVATE Qt6::Widgets Qt6::Multimedia)
+
+if(ANDROID)
+    set_property(TARGET YUVPlayer PROPERTY QT_ANDROID_PACKAGE_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/android)
+endif()
+
+if(ANDROID)
+    qt_finalize_executable(YUVPlayer)
+endif()
 
 # Add Executable for Benchmark
 add_executable(YUVBenchmark
